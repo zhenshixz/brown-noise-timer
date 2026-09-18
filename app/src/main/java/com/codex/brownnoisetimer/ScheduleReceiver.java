@@ -10,25 +10,15 @@ public final class ScheduleReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         String action = intent.getAction();
         if (Scheduler.ACTION_START.equals(action)) {
-            long stopAt = intent.getLongExtra(Scheduler.EXTRA_STOP_AT, 0);
-            if (SettingsStore.enabled(context)
-                    && !SettingsStore.fileUri(context).isEmpty()
-                    && stopAt > System.currentTimeMillis()) {
-                try {
-                    Intent play = new Intent(context, PlaybackService.class)
-                            .setAction(PlaybackService.ACTION_PLAY)
-                            .putExtra(Scheduler.EXTRA_STOP_AT, stopAt);
-                    context.startForegroundService(play);
-                } catch (RuntimeException error) {
-                    SettingsStore.get(context).edit()
-                            .putString(SettingsStore.LAST_ERROR, "定时启动失败：" + error.getClass().getSimpleName())
-                            .apply();
-                }
-            }
-            Scheduler.scheduleNextStart(context);
+            Scheduler.scheduleAll(context);
         } else if (Scheduler.ACTION_STOP.equals(action)) {
-            context.stopService(new Intent(context, PlaybackService.class));
-            Scheduler.scheduleNextStop(context);
+            if (Scheduler.isCurrentRevision(context, intent)) {
+                context.stopService(new Intent(context, PlaybackService.class));
+                Scheduler.scheduleNextStop(context, Math.max(System.currentTimeMillis(),
+                        intent.getLongExtra(Scheduler.EXTRA_EVENT_AT, 0)));
+            } else {
+                Scheduler.scheduleAll(context);
+            }
         } else if (Scheduler.ACTION_STOP_NOW.equals(action)) {
             context.stopService(new Intent(context, PlaybackService.class));
         } else if (Intent.ACTION_BOOT_COMPLETED.equals(action)
@@ -40,4 +30,3 @@ public final class ScheduleReceiver extends BroadcastReceiver {
         }
     }
 }
-

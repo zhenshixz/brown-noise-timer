@@ -14,16 +14,20 @@ public final class DebugAlarmReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent request) {
         if (ACTION_END_TEST.equals(request.getAction())) {
+            context.getSystemService(AlarmManager.class).cancel(endIntent(context));
             context.stopService(new Intent(context, PlaybackService.class));
             Scheduler.scheduleAll(context);
             Log.i("BrownNoiseTimer", "Debug alarm ended; normal schedule restored");
             return;
         }
         long startAt = System.currentTimeMillis() + 20_000L;
-        long stopAt = startAt + 20_000L;
+        long stopAt = startAt + 120_000L;
         Intent play = new Intent(context, PlaybackService.class)
                 .setAction(PlaybackService.ACTION_PLAY)
-                .putExtra(Scheduler.EXTRA_STOP_AT, stopAt);
+                .putExtra(Scheduler.EXTRA_SCHEDULED, true)
+                .putExtra(Scheduler.EXTRA_EVENT_AT, startAt)
+                .putExtra(Scheduler.EXTRA_STOP_AT, stopAt)
+                .putExtra(Scheduler.EXTRA_REVISION, SettingsStore.revision(context));
         PendingIntent operation = PendingIntent.getForegroundService(context, 901, play,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Intent show = new Intent(context, MainActivity.class);
@@ -31,11 +35,15 @@ public final class DebugAlarmReceiver extends BroadcastReceiver {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         context.getSystemService(AlarmManager.class).setAlarmClock(
                 new AlarmManager.AlarmClockInfo(startAt, showIntent), operation);
-        Intent stop = new Intent(context, DebugAlarmReceiver.class).setAction(ACTION_END_TEST);
-        PendingIntent stopOperation = PendingIntent.getBroadcast(context, 903, stop,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent stopOperation = endIntent(context);
         context.getSystemService(AlarmManager.class).setAlarmClock(
                 new AlarmManager.AlarmClockInfo(stopAt, showIntent), stopOperation);
         Log.i("BrownNoiseTimer", "Debug alarm scheduled at " + startAt);
+    }
+
+    private static PendingIntent endIntent(Context context) {
+        Intent stop = new Intent(context, DebugAlarmReceiver.class).setAction(ACTION_END_TEST);
+        return PendingIntent.getBroadcast(context, 903, stop,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
 }

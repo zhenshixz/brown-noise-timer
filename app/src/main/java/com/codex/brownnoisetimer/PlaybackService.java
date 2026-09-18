@@ -21,6 +21,7 @@ import android.util.Log;
 
 public final class PlaybackService extends Service {
     static final String ACTION_PLAY = "com.codex.brownnoisetimer.PLAY";
+    static final String ACTION_REFRESH_SCHEDULE = "com.codex.brownnoisetimer.REFRESH_SCHEDULE";
     private static final String CHANNEL_ID = "brown_noise_playback";
     private static final int NOTIFICATION_ID = 7;
 
@@ -30,7 +31,10 @@ public final class PlaybackService extends Service {
     private long stopAt;
     private boolean pausedForFocus;
     private final Handler stopHandler = new Handler(Looper.getMainLooper());
-    private final Runnable timedStop = this::stopSelf;
+    private final Runnable timedStop = () -> {
+        Scheduler.scheduleNextStop(this, Math.max(stopAt, System.currentTimeMillis()));
+        stopSelf();
+    };
 
     @Override
     public void onCreate() {
@@ -42,9 +46,23 @@ public final class PlaybackService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null && ACTION_REFRESH_SCHEDULE.equals(intent.getAction())) {
+            if (player == null) {
+                stopSelf();
+            } else {
+                long nextStop = Scheduler.nextStopMillis(this, System.currentTimeMillis());
+                stopAt = nextStop == Long.MAX_VALUE ? 0 : nextStop;
+                stopHandler.removeCallbacks(timedStop);
+                if (stopAt > 0) {
+                    stopHandler.postDelayed(timedStop,
+                            Math.max(1, stopAt - System.currentTimeMillis()));
+                }
+            }
+            return START_NOT_STICKY;
+        }
         if (intent != null && Scheduler.ACTION_STOP.equals(intent.getAction())) {
             Log.i("BrownNoiseTimer", "Scheduled playback stop");
-            Scheduler.scheduleNextStop(this);
+            Scheduler.scheduleNextStop(this, System.currentTimeMillis());
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -52,16 +70,30 @@ public final class PlaybackService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
-        stopAt = intent.getLongExtra(Scheduler.EXTRA_STOP_AT, 0);
-        stopHandler.removeCallbacks(timedStop);
-        Log.i("BrownNoiseTimer", "Playback service started, scheduled=" + (stopAt > 0));
-        if (stopAt > 0) {
-            Scheduler.scheduleNextStart(this);
-            Scheduler.scheduleStopAt(this, stopAt);
-            if (!SettingsStore.enabled(this) || System.currentTimeMillis() >= stopAt) {
-                stopSelf();
+        boolean scheduled = intent.getBooleanExtra(Scheduler.EXTRA_SCHEDULED, false);
+        long eventAt = intent.getLongExtra(Scheduler.EXTRA_EVENT_AT, 0);
+        long now = System.currentTimeMillis();
+        if (scheduled) {
+            Scheduler.scheduleNextStart(this, Math.max(now, eventAt) + 1);
+            Scheduler.scheduleNextStop(this, now);
+            if (!SettingsStore.enabled(this) || !Scheduler.isCurrentRevision(this, intent)
+                    || eventAt <= 0 || now - eventAt > 5 * 60_000L) {
+                Log.i("BrownNoiseTimer", "Skipping outdated scheduled start");
+                if (player == null) stopSelf();
                 return START_NOT_STICKY;
             }
+        } else if (intent.getLongExtra(Scheduler.EXTRA_STOP_AT, 0) > 0) {
+            // An alarm from the previous app version should be replaced, not played.
+            Scheduler.scheduleAll(this);
+            if (player == null) stopSelf();
+            return START_NOT_STICKY;
+        }
+        stopAt = scheduled ? intent.getLongExtra(Scheduler.EXTRA_STOP_AT, 0) : 0;
+        stopHandler.removeCallbacks(timedStop);
+        Log.i("BrownNoiseTimer", "Playback service started, scheduled=" + scheduled);
+        if (stopAt > 0 && now >= stopAt) {
+            if (player == null) stopSelf();
+            return START_NOT_STICKY;
         }
         try {
             Notification notification = notification("正在准备播放");
@@ -71,7 +103,7 @@ public final class PlaybackService extends Service {
             } else {
                 startForeground(NOTIFICATION_ID, notification);
             }
-            playSelectedFile();
+            if (player == null) playSelectedFile();
             if (stopAt > 0) {
                 stopHandler.postDelayed(timedStop,
                         Math.max(1, stopAt - System.currentTimeMillis()));
